@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: Apache-2.0
+/*
+ * MM6108 hand-wired DIRECTLY to the Pi's 40-pin header — no carrier board.
+ *
+ * This reproduces the pin map and SPI plumbing of a setup that is REPORTED WORKING:
+ * ykhan1999/zero2w_80211ah, a Heltec HT-HC01P wired straight to a Pi Zero 2W.
+ * It exists to remove the last untested element in our own bring-up — the Seeed
+ * WM1302 Pi HAT, a carrier designed for the WM1302 LoRa concentrator, whose routing
+ * to the mini-PCIe socket we have never verified in copper.
+ *
+ * Every software variable has already been eliminated against the WM1302 HAT: both
+ * pin maps, stock and Morse-patched kernels, all three chip-select configurations,
+ * the vendor's exact module parameters, GPIO 18 in both polarities, and a long reset
+ * sequence. The chip has never answered. If it answers here, the carrier is the
+ * fault; if it does not, the fault is the card or the Pi.
+ *
+ * WIRING (Heltec HT-HC01P debug board → Pi 40-pin header):
+ *
+ *   MM6108        Pi GPIO   Header pin   Note
+ *   ------------------------------------------------------------------
+ *   3V3           3V3       1 or 17      module VDD
+ *   GND           GND       6/9/14/20/25 common ground
+ *   CS            GPIO 8    24           SPI0 CE0
+ *   MISO          GPIO 9    21
+ *   MOSI          GPIO 10   19
+ *   CLK           GPIO 11   23
+ *   RESET         GPIO 5    29           active low
+ *   WAKE          GPIO 3    5            WL_REG_ON style enable, active high
+ *   BUSY          GPIO 7    26           part of the wake sequence
+ *   INT           GPIO 25   22           module -> host interrupt
+ *
+ * NOTE GPIO 3 is also I2C1 SDA and GPIO 7 is also SPI0 CE1. Both are freed here:
+ * cs-gpios is reduced to a single entry and the chip-select pin group is narrowed to
+ * GPIO 8, so CS1 never claims GPIO 7. `dtoverlay=morse-ps` MUST stay disabled — it
+ * claims GPIO 7 as well, and the collision stops the SPI controller probing at all.
+ *
+ * Build:  dtc -@ -I dts -O dtb -o mm6108-spi-heltec-direct.dtbo mm6108-spi-heltec-direct.dts
+ * Select: dtoverlay=mm6108-spi-heltec-direct   (in distroconfig.txt, morse-ps commented out)
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2711";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&spi0_pins &spi0_cs_pins>;
+			cs-gpios = <&gpio 8 1>;
+
+			mm6108@0 {
+				compatible = "morse,mm610x-spi";
+				reg = <0>;			/* CE0 */
+				spi-max-frequency = <50000000>;
+
+				reset-gpios   = <&gpio  5 1>;	/* active low, as upstream has it */
+				power-gpios   = <&gpio  3 0>,	/* wake */
+						<&gpio  7 0>;	/* busy */
+				spi-irq-gpios = <&gpio 25 0>;
+
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&spidev0>;
+		__overlay__ { status = "disabled"; };
+	};
+
+	fragment@2 {
+		target = <&spidev1>;
+		__overlay__ { status = "disabled"; };
+	};
+
+	fragment@3 {
+		target = <&gpio>;
+		__overlay__ {
+			spi0_pins: spi0_pins {
+				brcm,pins = <9 10 11>;
+				brcm,function = <4>;	/* ALT0 */
+				brcm,pull = <2>;
+			};
+
+			spi0_cs_pins: spi0_cs_pins {
+				brcm,pins = <8>;	/* GPIO 7 deliberately excluded */
+				brcm,function = <1>;	/* GPIO_OUT */
+				brcm,pull = <2>;
+			};
+		};
+	};
+};
