@@ -17,7 +17,8 @@ It is intended to be publishable without a cleanup pass.
 common/                     device-agnostic: provisioning, image finalisation, build container
 raspberrypi/
   rpi4/                     Raspberry Pi 4B (bcm2711)
-    BRINGUP.md              the bring-up log — read this first
+    README.md               build, flash, first boot — start here
+    BRINGUP.md              bring-up log: findings, failures, why
     build-morse-openwrt.sh  build Morse Micro's OpenWrt for this board
     overlays/               device tree overlays
     tools/                  bench diagnostics, compiled on the target
@@ -36,47 +37,18 @@ Add a board as `<vendor>/<model>/`, keeping anything device-agnostic in `common/
 
 ---
 
-## Quick start (Raspberry Pi 4B + MM6108 over SPI)
+## Boards
 
-Four steps, and the order matters — `files/` is consumed when the rootfs is assembled, so
-provisioning has to happen **before** the image is built.
+**Build instructions live with each board, not here** — targets, quirks and flashing steps differ
+enough that a single root recipe goes stale the moment a second board is added.
 
-```bash
-# 1. fetch, configure and build. First run only: x86_64 Linux host, ~50 GB, 1-3 h.
-./raspberrypi/rpi4/build-morse-openwrt.sh ~/morse-openwrt
+| Board | Peripheral | Status | Start here |
+|---|---|---|---|
+| Raspberry Pi 4B (bcm2711) | Morse Micro MM6108 Wi-Fi HaLow over SPI, on a Seeed WM1302 Pi HAT | in bring-up | [`raspberrypi/rpi4/README.md`](raspberrypi/rpi4/README.md) — build & flash · [`BRINGUP.md`](raspberrypi/rpi4/BRINGUP.md) — findings |
 
-# 2. bake in credentials, RJ45+DHCP, an SSH key and the data-partition mount.
-#    Prints the credentials; writes files/ into the buildroot.
-SSH_PUBKEY=~/.ssh/id_ed25519.pub HOSTNAME_=tawk-halow-01 \
-  ./common/provision-image.sh ~/morse-openwrt
-
-# 3. re-assemble the image so files/ is included. Incremental — minutes, not hours.
-cd ~/morse-openwrt && make -j"$(nproc)"
-
-# 4. bind a SHA-256 to the credentials baked into each image. THIS IS A SEPARATE STEP:
-#    a bare `make` does not run it; only build-morse-openwrt.sh calls it for you.
-~/openwrt-tawk/common/finalize-image.sh ~/morse-openwrt
-```
-
-Outputs land in the **buildroot root**, not `bin/targets/`:
-
-| Path | Contents |
-|---|---|
-| `~/morse-openwrt/tawk-image-credentials.txt` | human-readable credentials + image SHA-256 |
-| `~/morse-openwrt/tawk-image-manifest.txt` | per-image manifest: hash, size, build, credentials |
-| `~/morse-openwrt/bin/targets/.../ *.img.gz.sha256` | `sha256sum -c` files, beside each image |
-
-Take the ***-spi-*** image; the `-sdio-` one is for a different carrier.
-
-Prefer the pinned build container over a modern host distro — it is the one Morse's own CI uses, and
-it avoids a class of host-toolchain breakage:
-
-```bash
-UID_GID="$(id -u):$(id -g)" SRC=~/morse-openwrt \
-  docker compose -f common/docker-compose.morse-openwrt.yml run --rm build
-```
-
-`raspberrypi/rpi4/BRINGUP.md` carries the detail, including several traps that each cost an evening.
+Adding a board: create `<vendor>/<model>/` with its own `README.md` (how to build and flash) and,
+if the bring-up was non-trivial, a `BRINGUP.md` (what was learned, including what failed). Anything
+device-agnostic belongs in `common/`.
 
 ## Related
 
