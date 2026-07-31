@@ -44,7 +44,7 @@ enough that a single root recipe goes stale the moment a second board is added.
 
 | Board | Peripheral | Status | Start here |
 |---|---|---|---|
-| Raspberry Pi 4B (bcm2711) | Morse Micro MM6108 Wi-Fi HaLow over SPI, on a Seeed WM1302 Pi HAT | in bring-up | [`raspberrypi/rpi4/README.md`](raspberrypi/rpi4/README.md) — build & flash · [`BRINGUP.md`](raspberrypi/rpi4/BRINGUP.md) — findings |
+| Raspberry Pi 4B (bcm2711) | Morse Micro MM6108 Wi-Fi HaLow over SPI, hand-wired | **working** — S1G link at 924 MHz | [`raspberrypi/rpi4/README.md`](raspberrypi/rpi4/README.md) — build & flash · [`BRINGUP.md`](raspberrypi/rpi4/BRINGUP.md) — findings |
 
 Adding a board: create `<vendor>/<model>/` with its own `README.md` (how to build and flash) and,
 if the bring-up was non-trivial, a `BRINGUP.md` (what was learned, including what failed). Anything

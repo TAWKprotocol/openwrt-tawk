@@ -14,12 +14,86 @@ kernel **7.0.0-1009-raspi** (aarch64), 4 GB. Relates: `HALOW-PLAN.md` (protocol 
 | Firmware + BCFs installed to `/lib/firmware/morse` (27 files) | ✅ |
 | Pi 4 device tree overlay binds `morse_spi` to `spi0.0`, `spidev0` released | ✅ |
 | Driver survives a kernel upgrade (DKMS + overlay hook) | ✅ (§6 — it did not, until fixed) |
-| Chip responds on SPI | ❌ blocked — **all software variables eliminated; physical** (§5) |
-| `wlanN` S1G interface up / scanning | ⛔ blocked |
-| TAWK bearer over HaLow | ⛔ blocked |
+| Chip responds on SPI | ✅ **resolved 2026-07-31 — the carrier was the fault** (§0) |
+| S1G interface up, scanning, associated | ✅ `wlh0` @ 924 MHz, link established (§0) |
+| TAWK bearer over HaLow | ⬜ next — needs the 0x88B5 `Transport` impl |
 
 **The software side is done and reproducible** (`build-morse-driver.sh`). The blocker is
 physical: the MM6108 is not driving any of its pins.
+
+## 0. Verdict and working configuration (2026-07-31)
+
+**The Seeed WM1302 Pi HAT was the fault.** An MM6108 hand-wired directly to the Pi's 40-pin header
+came up on the first boot, on the same kernel, driver, firmware and BCF that had failed against the
+HAT for days.
+
+Everything else had already been eliminated against that carrier — both pin maps, stock Ubuntu 7.0
+and Morse-patched 6.6 kernels, all three chip-select configurations, the vendor's exact module
+parameters, GPIO 18 in both polarities, a 2-second reset sequence, and de-stacking. The chip never
+answered once. The carrier was the only element never verified, because *"the WM6108 fits the WM1302
+HAT"* is a vendor claim, not a measurement.
+
+### What works
+
+| | |
+|---|---|
+| Host | Raspberry Pi 4B, MorseMicro/openwrt `3.0.2`, board `ekh-bcm2711-mm6108` |
+| Radio | Heltec **HT-HC01P** (MM6108), **hand-wired to the header** — no carrier board |
+| Overlay | `overlays/mm6108-spi-heltec-direct.dts` |
+| `morse-ps` | **must be disabled** — it claims GPIO 7, which the base DT wants for SPI CS1 |
+| Interface | `wlh0` (netifd-morse naming; **not** `wlan*` — `morse_cli -i wlh0`) |
+| RF | **924 MHz**, 8 MHz BW, primary 2 MHz, index 3, country US |
+
+Wiring is in the overlay header. The intermediate result that isolated it: with the *wrong* overlay
+but *correct* SPI wiring, firmware and BCF loaded and only the health-check timed out — proving the
+bus was fine and only reset/IRQ/wake/busy were misassigned.
+
+### Link established
+
+A second Heltec HaLow device running OpenWrt, switched from AP to STA, associated to the Pi:
+
+```
+0C:BF:74:02:A2:67   -85 / -82 dBm
+  RX  1.6 Mbit/s, 4 MHz, MCS 0, Short GI
+  TX  9.8 Mbit/s, 8 MHz, MCS 2, Short GI
+```
+
+Rate control adapting in both directions confirms a real link. **SNR is negative** (−85 signal vs
+−82 noise) — it decodes only because MCS 0 at low bandwidth is extremely robust. Cause is bench
+conditions: no/incorrect 900 MHz antennas, radios inches apart, and heavy local RF. Fix antennas and
+separation before drawing any throughput conclusion; rate control will sit on the floor until then.
+
+### Association parameters
+
+| | |
+|---|---|
+| SSID | `tawk-halow-01` |
+| Security | `sae` (WPA3-SAE) |
+| Key | `12345678` — Morse's default, **not** the provisioned key (see below) |
+| Country | `US` |
+
+### Three traps worth remembering
+
+1. **`iw` reports nonsense frequencies for S1G** — `channel 161 (5805 MHz), width 160 MHz`. Stock
+   `iw`/hostapd map S1G through 5 GHz operating classes. **`morse_cli -i wlh0 channel` is
+   authoritative.**
+2. **`wds='1'`** is set on the AP by default; a STA that does not match may associate without
+   bridging, or not associate at all.
+3. **Provisioning ordering.** `95-morse-wireless-defaults` runs before our `99-tawk-provision`, and
+   the S1G `wifi-iface` is created later still, by the hotplug when `radio1` is enabled. Both the
+   SSID and the AP key therefore keep vendor defaults. Fixing this needs the provisioning to set
+   them explicitly rather than relying on hostname/ordering.
+
+### Still open
+
+- Is the **Wio-WM6108 card itself** good? Testing it in the same hand-wired harness would settle it,
+  and it matters because mini-PCIe was the route to HaLow on other carriers.
+- Antennas + separation, then an `iperf3` figure for `BENCHMARKS.md`.
+- TAWK bearer over HaLow: raw `AF_PACKET`, EtherType **0x88B5**, matching `esp32s3-tawk/halow/`.
+- Provisioning bugs: SSID/key ordering above, and `fstab.tawkdata` silently no-ops because
+  `block-mount` is not in the image.
+
+---
 
 ## 1. The hardware path, and why it is not PCIe
 
