@@ -47,7 +47,16 @@ SSH_PUBKEY="${SSH_PUBKEY:-}"
 # Generated once and PRINTED, never silently randomised per boot.
 # Charset is strictly A-Za-z0-9 -- no special characters, so the values survive
 # shell quoting, QR/label printing, WPA passphrase rules and hand transcription.
-genpw() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-16}"; }
+# NB: do NOT write this as `tr -dc ... </dev/urandom | head -c N`. head exits after
+# N bytes, tr takes SIGPIPE and returns 141, and under `set -euo pipefail` that
+# kills the script -- after the assignment has already happened, so it looks like
+# it worked. Bound the INPUT instead, so tr reaches EOF and exits 0.
+genpw() {
+	local n="${1:-16}" s
+	s="$(LC_ALL=C tr -dc 'A-Za-z0-9' < <(head -c "$((n * 16))" /dev/urandom))"
+	[ "${#s}" -ge "$n" ] || { echo "FATAL: entropy filter yielded ${#s} < $n chars" >&2; exit 1; }
+	printf '%s' "${s:0:n}"
+}
 [ -n "$ROOT_PW"  ] || ROOT_PW="$(genpw 16)"
 [ -n "$USER_PW"  ] || USER_PW="$(genpw 16)"
 [ -n "$WIFI_KEY" ] || WIFI_KEY="$(genpw 16)"
