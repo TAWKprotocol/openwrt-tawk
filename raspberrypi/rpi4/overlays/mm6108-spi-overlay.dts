@@ -34,6 +34,35 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
+			/*
+			 * Re-state pinctrl-0 pointing at the groups defined in fragment@3.
+			 * Redefining a pin group by label gives it a NEW phandle, and the base
+			 * DT's pinctrl-0 still referenced the old one:
+			 *   spi-bcm2835 fe204000.spi: prop pinctrl-0 index 1 invalid phandle
+			 * cs-gpios, the pin group and this reference are a coupled set -- change
+			 * one and all three must agree, which is why partial adoption fails.
+			 */
+			pinctrl-names = "default";
+			pinctrl-0 = <&spi0_pins &spi0_cs_pins>;
+
+			/*
+			 * ONE chip select, not the base DT's two.
+			 *
+			 * The Pi's base DT declares cs-gpios = <&gpio 8 1>, <&gpio 7 1>, i.e.
+			 * GPIO 7 as CS1. Morse's morse-ps overlay separately claims GPIO 7 for
+			 * its own power-sequencing pinctrl group. Both cannot have it, and the
+			 * loser is the SPI controller:
+			 *
+			 *   pinctrl-bcm2835: pin gpio7 already requested by leds;
+			 *                    cannot claim for fe204000.spi
+			 *   spi-bcm2835 fe204000.spi: Error applying setting, reverse things back
+			 *
+			 * The controller then fails to probe and NO spi devices are created at
+			 * all -- so the morse driver never even attempts a probe, and dmesg shows
+			 * only its registration lines. Dropping to a single CS frees GPIO 7.
+			 */
+			cs-gpios = <&gpio 8 1>;
+
 			mm6108@0 {
 				compatible = "morse,mm610x-spi";
 				reg = <0>;
@@ -49,11 +78,52 @@
 		};
 	};
 
-	/* spidev must not claim CS0, or the morse driver cannot bind to it. */
+	/* spidev must not claim CS0, or the morse driver cannot bind to it.
+	 * spidev@1 goes too: with a single chip select there is no CS1 for it. */
 	fragment@1 {
 		target = <&spidev0>;
 		__overlay__ {
 			status = "disabled";
+		};
+	};
+
+	fragment@2 {
+		target = <&spidev1>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	/*
+	 * Narrow the chip-select PINMUX GROUP to GPIO 8.
+	 *
+	 * Reducing cs-gpios above is not sufficient: spi0's pinctrl-0 references the
+	 * base DT's spi0_cs_pins group, which lists BOTH chip selects (7 and 8), and
+	 * pinctrl claims every pin in a group regardless of how many are used. So the
+	 * controller still fought morse-ps for GPIO 7 and still failed to probe:
+	 *
+	 *   could not request pin 7 (gpio7) from group gpio7 on device pinctrl-bcm2711
+	 *
+	 * Redefining the group by label overrides it in place. This mirrors what Morse's
+	 * own overlay does; the deliberate difference from theirs remains only the
+	 * carrier pin map in the mm6108 node above.
+	 */
+	fragment@3 {
+		target = <&gpio>;
+		__overlay__ {
+			/* MISO/MOSI/SCLK stay in ALT0; pull high, as the vendor overlay does. */
+			spi0_pins: spi0_pins {
+				brcm,pins = <9 10 11>;
+				brcm,function = <4>;	/* BCM2835_FSEL_ALT0 */
+				brcm,pull = <2>;
+			};
+
+			/* Chip select GPIO 8 only -- GPIO 7 belongs to morse-ps. */
+			spi0_cs_pins: spi0_cs_pins {
+				brcm,pins = <8>;
+				brcm,function = <1>;	/* BCM2835_FSEL_GPIO_OUT */
+				brcm,pull = <2>;
+			};
 		};
 	};
 };

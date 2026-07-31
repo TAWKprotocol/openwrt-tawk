@@ -14,7 +14,7 @@ kernel **7.0.0-1009-raspi** (aarch64), 4 GB. Relates: `HALOW-PLAN.md` (protocol 
 | Firmware + BCFs installed to `/lib/firmware/morse` (27 files) | ✅ |
 | Pi 4 device tree overlay binds `morse_spi` to `spi0.0`, `spidev0` released | ✅ |
 | Driver survives a kernel upgrade (DKMS + overlay hook) | ✅ (§6 — it did not, until fixed) |
-| Chip responds on SPI | ❌ blocked — **most likely the stock kernel, not the card** (§5) |
+| Chip responds on SPI | ❌ blocked — **all software variables eliminated; physical** (§5) |
 | `wlanN` S1G interface up / scanning | ⛔ blocked |
 | TAWK bearer over HaLow | ⛔ blocked |
 
@@ -234,6 +234,52 @@ which leaves the **cold power cycle** and the **patched kernel** as the untried 
 > (reset 5, IRQ 25, wake 3, busy 7) is a *hand-wired* Heltec HT-HC01P, chosen to match Morse's
 > overlay, not a carrier constraint. It does not transfer to the WM1302 HAT, whose routing is fixed
 > in copper.
+
+### 2026-07-31 — the Morse-patched kernel changes nothing. Result matrix.
+
+Running Morse's own OpenWrt (`3.0.2`, `ekh-bcm2711-mm6108`) on the same hardware:
+
+| Kernel | wake/busy pins | chip-select config | Result |
+|---|---|---|---|
+| stock Ubuntu 7.0 | ours 23 / 24 | base DT, **two** CS, native alt-fn | CMD63 **passes**, `cmd53 b=0xffffffff` → **-71** |
+| Morse patched 6.6 | Morse 3 / 7 | vendor: one CS, `GPIO_OUT` | CMD63 **fails** → -61 |
+| Morse patched 6.6 | ours 23 / 24 | vendor: one CS, `GPIO_OUT` | CMD63 **fails** → -61 |
+| **Morse patched 6.6** | **ours 23 / 24** | **base DT, two CS, native** | CMD63 **passes**, `cmd53 b=0xffffffff` → **-71** |
+
+Two conclusions, and the first retires the reason this migration happened.
+
+- **The kernel patches make no difference.** On the patched kernel, in the best configuration, the
+  failure is *byte-identical* to the stock kernel — same `r=0x10050002 b=0xffffffff`, same `-71`.
+  §5's inference that "the stock kernel is the blocker, the card is probably fine" is **wrong**. The
+  identical-hardware forum report remains true, but whatever differs in that setup is not the kernel.
+- **The chip-select configuration decides CMD63, and nothing decides `cmd53`.** Single-CS or
+  `GPIO_OUT` chip select ⇒ `-61`. Native two-CS ⇒ CMD63 passes and then the first register read
+  returns all-ones. No configuration has ever got past that read.
+
+Getting to a probe on OpenWrt needed three interdependent device tree changes, and partial adoption
+fails differently at each step — worth knowing before anyone tries again:
+
+1. `morse-ps` claims **GPIO 7** for Morse's MMECH06 carrier, colliding with the base DT's CS1:
+   `pin gpio7 already requested by leds; cannot claim for fe204000.spi` → controller never probes,
+   **no SPI devices at all**, driver silent.
+2. Narrowing `cs-gpios` alone is insufficient — `pinctrl-0` still references a pin *group* containing
+   GPIO 7: `could not request pin 7 from group gpio7`.
+3. Redefining that group by label gives it a new phandle, so the base's reference dangles:
+   `prop pinctrl-0 index 1 invalid phandle`. `cs-gpios`, the pin group, and `pinctrl-0` are a coupled
+   set; all three must agree.
+
+Since `morse-ps` configures the wrong carrier's pins anyway (wake on 7, not 23), **disabling it and
+using the base DT's native two-CS setup is the cleanest configuration** — and is what the device now
+runs (`mm6108-spi-native.dts`).
+
+**Where that leaves it.** Every software variable identified has now been eliminated: pinout (both
+tried), kernel patches (both tried), chip-select config (all three tried), power-enable GPIO 18
+(both polarities), reset timing, and de-stacking. The physical evidence from §4 — IRQ, MISO, BUSY and
+the vendor BUSY pin all floating in every state — stands unexplained by any of them. The remaining
+candidates are the **card itself, its seating, or what the WM1302 HAT actually routes to the
+mini-PCIe socket**, which is a carrier designed for the WM1302 LoRa concentrator, not this card.
+
+This matrix is the right thing to send Morse's forum with a support request.
 
 ### Controlled experiments, 2026-07-30 (de-stacked: HaLow HAT only)
 

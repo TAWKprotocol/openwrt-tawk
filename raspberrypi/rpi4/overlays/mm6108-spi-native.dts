@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: Apache-2.0
+/*
+ * Wio-WM6108 (Quectel FGH100M-H = Morse Micro MM6108) Wi-Fi HaLow mini-PCIe card
+ * carried on a Seeed WM1302 Pi HAT, attached to a Raspberry Pi 4 over SPI0 / CS0.
+ *
+ * Pin map (WM1302 Pi HAT routing of the mini-PCIe golden fingers to the 40-pin header):
+ *   SPI0  SCLK/MOSI/MISO = GPIO 11 / 10 / 9   (native spi0_pins)
+ *   CS0                  = GPIO  8            (cs-gpios[0], already in the base DT)
+ *   RESET                = GPIO 17            (active low)
+ *   IRQ                  = GPIO  5            (level low)
+ *   WAKE                 = GPIO 23            (power-gpios[0])
+ *   BUSY                 = GPIO 24            (power-gpios[1])
+ *
+ * The morse driver parses these with of_get_named_gpio() and then drives them
+ * through the *legacy* raw-GPIO API (gpio_request_one/gpio_direction_output) and
+ * derives its interrupt with gpio_to_irq(). Two consequences:
+ *   - every GPIO cell flag is 0, so gpiolib does not invert a line the driver is
+ *     already driving with the correct polarity itself;
+ *   - no interrupts/interrupt-parent property is needed or read.
+ *
+ * Build:  dtc -@ -I dts -O dtb -o mm6108-spi.dtbo mm6108-spi-native.dts
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2711";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+
+
+			mm6108@0 {
+				compatible = "morse,mm610x-spi";
+				reg = <0>;
+				spi-max-frequency = <20000000>;
+
+				reset-gpios   = <&gpio 17 0>;
+				spi-irq-gpios = <&gpio  5 0>;
+				power-gpios   = <&gpio 23 0>,
+						<&gpio 24 0>;
+
+				status = "okay";
+			};
+		};
+	};
+
+	/* spidev must not claim CS0, or the morse driver cannot bind to it.
+	 * spidev@1 goes too: with a single chip select there is no CS1 for it. */
+	fragment@1 {
+		target = <&spidev0>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@2 {
+		target = <&spidev1>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+};
