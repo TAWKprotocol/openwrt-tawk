@@ -6,8 +6,8 @@ Build scripts, device tree overlays, provisioning and bench tooling for getting 
 security peripherals working on OpenWrt across a range of boards. One repository so the work
 accumulates instead of being rediscovered per device.
 
-**This repository contains no TAWK protocol source.** That is a deliberate, enforced boundary —
-see [The IP boundary](#the-ip-boundary). It is intended to be publishable without a cleanup pass.
+**This repository contains no TAWK protocol source.** That is a deliberate, enforced boundary.
+It is intended to be publishable without a cleanup pass.
 
 ---
 
