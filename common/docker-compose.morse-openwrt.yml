@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Build Morse Micro's OpenWrt in the same container their own CI uses.
+#
+# Taken from MorseMicro/openwrt@3.0.2 .devcontainer/ci-env/devcontainer.json, which
+# pins ghcr.io/openwrt/buildbot/buildworker-v3.8.0:v9 with remoteUser "buildbot".
+# Prefer this over a hand-rolled Ubuntu image: it is the environment upstream tests
+# against, and it removes the whole class of host-toolchain breakage seen on Ubuntu
+# 24.04 (GCC 15 vs the golang host build, the dropped python3-distutils, etc.).
+#
+# OpenWrt refuses to build as root, which is why the image ships a `buildbot` user.
+#
+# Non-sudo docker: add yourself to the docker group once --
+#   sudo usermod -aG docker "$USER" && newgrp docker
+# Note that docker-group membership is equivalent to passwordless root on the host
+# (the daemon runs as root and the socket grants full access); fine on a dedicated
+# build box, not on a shared one. Rootless Docker is genuinely unprivileged but maps
+# container uid 1000 to a host *subuid*, so build output in the bind-mounted tree
+# comes back owned by ~165536 and unwritable -- awkward for exactly this workload.
+#
+# usage:
+#   UID_GID="$(id -u):$(id -g)" docker compose -f docker-compose.morse-openwrt.yml run --rm build
+#   # then, inside the container:
+#   ./scripts/morse_setup.sh -i -b ekh-bcm2711-mm6108
+#   make -j"$(nproc)"
+#
+# Set SRC to your checkout of https://github.com/MorseMicro/openwrt (tag 3.0.2).
+
+services:
+  build:
+    image: ghcr.io/openwrt/buildbot/buildworker-v3.8.0:v9
+    # The image's buildbot user is uid 1000. If your host uid differs, build output
+    # in the bind mount lands owned by the wrong user -- so pass yours through.
+    # OpenWrt refuses to build as root, so never set this to 0.
+    user: "${UID_GID:-buildbot}"
+    working_dir: /home/buildbot/openwrt
+    volumes:
+      - ${SRC:-${HOME}/morse-openwrt}:/home/buildbot/openwrt
+      # Persist downloads and ccache across container runs so a rebuild is not a
+      # full re-download. Both are plain host directories; create them first.
+      - ${DL_CACHE:-${HOME}/.cache/openwrt-dl}:/home/buildbot/openwrt/dl
+      - ${CCACHE:-${HOME}/.cache/openwrt-ccache}:/home/buildbot/.ccache
+    environment:
+      - CCACHE_DIR=/home/buildbot/.ccache
+      # OpenWrt's build is happier with a sane locale.
+      - LC_ALL=C
+    # An OpenWrt build is long and memory-hungry at link time; don't let the
+    # default shm size throttle it.
+    shm_size: "2gb"
+    stdin_open: true
+    tty: true
+    command: /bin/bash

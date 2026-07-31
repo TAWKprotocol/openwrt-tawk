@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Install to /etc/kernel/postinst.d/zz-mm6108-overlay (mode 0755).
+#
+# Reinstall the MM6108 HaLow device tree overlay after flash-kernel repopulates
+# /boot/firmware/current/overlays/.
+#
+# Why this exists: Ubuntu's raspi images set os_prefix=current/ in config.txt, and
+# flash-kernel rebuilds that directory on every kernel install. A 7.0.0-1009 ->
+# 7.0.0-1015 unattended upgrade deleted mm6108-spi.dtbo from it while leaving
+# "dtoverlay=mm6108-spi" in config.txt. The firmware then skips the missing overlay
+# *silently* — no boot error, no dmesg line — so the radio simply never appears.
+# Paired with DKMS (which handles the out-of-tree module across the same upgrade),
+# this keeps a kernel bump from disarming the bearer.
+set -e
+SRC=/usr/local/share/mm6108/mm6108-spi.dtbo
+[ -f "$SRC" ] || exit 0
+for d in /boot/firmware/current/overlays /boot/firmware/overlays; do
+	[ -d "$d" ] && cp "$SRC" "$d/" || true
+done
+exit 0
