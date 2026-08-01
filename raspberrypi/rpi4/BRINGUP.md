@@ -741,3 +741,99 @@ directory's `mm6108-spi.dtbo` into the boot partition's `overlays/`.
 5. Expected ceiling: the Morse community reports **~19 Mbps on Pi 4** over SPI versus ~800 kbps on
    a Pi 5 (RP1 SPI bottleneck) — the Pi 4 is the good host here, which is worth remembering before
    anyone "upgrades" the bench.
+
+---
+
+## 11. The radio ran for weeks with **no valid RF calibration** (2026-08-01)
+
+This is the largest single finding in this document, and it invalidates two pieces of advice above.
+
+### Symptom
+
+Every HaLow station associated to this AP and then dropped, at RSSI values that should have been
+comfortable (−72 to −78 dBm). `hostapd_s1g` logged endless
+`did not acknowledge authentication response`. Rate control sat pinned at MCS 0 with heavy retries
+(`tx retries: 81`, `tx failed: 23`). A reciprocity measurement showed the Pi being heard **12 dB
+weaker** than it heard its peer, which was (wrongly) attributed to the peer having a front-end PA
+this board lacks.
+
+### Cause
+
+The LuCI page said it plainly, once someone looked:
+
+> **BCF may not be appropriate!** The BCF file on this device must be specified via UCI as the board
+> type isn't set in the OTP bits. Currently, your HaLow device is using the non-functional failsafe BCF.
+
+With no `bcf` set, the driver fell back to `bcf_default.bin`, whose `.board_config` section is a
+**48-byte stub** against a real board's 112 bytes, and which has **no `.regdom_US` section at all**.
+No power table, no regulatory table — the radio transmitted at a small fraction of its capability.
+
+### Correction to §4 and §8
+
+- **§4 "Leave it unset on first light" is wrong for this build.** That advice assumes the OTP carries
+  a board type. On this hardware — a **hand-wired Heltec HT-HC01P**, not a real EKH01 — it does not,
+  so "unset" silently means "failsafe", not "auto-detect".
+- **§8's `ln -s bcf_fgh100mhaamd.bin bcf_default.bin` was the right instinct**, but was not in effect
+  on the running image (a reflash or image rebuild loses it). Prefer the UCI option, which survives:
+
+```sh
+uci set wireless.radio1.bcf='bcf_fgh100mhaamd.bin'
+uci commit wireless && wifi reload
+# revert: uci delete wireless.radio1.bcf; uci commit wireless; wifi reload
+```
+
+Confirm it took — the driver logs the file it loaded, and LuCI's warning disappears:
+
+```
+morse_spi spi0.0: Loaded BCF from morse/bcf_fgh100mhaamd.bin, size 1251, crc32 0x941b2a82
+```
+
+### Measured effect
+
+| | failsafe (`bcf_default.bin`) | `bcf_fgh100mhaamd.bin` |
+|---|---|---|
+| AP as seen by a station | **−84 dBm** | **−12 dBm** |
+| Station as seen by the AP | −72 dBm | −59 dBm |
+| tx retries / tx failed | 81 / 23 | **0 / 0** |
+| TX MCS histogram | `2692 325 70 21 4 …` (pinned at MCS 0) | `80 0 0 0 0 0 0 4 …` (MCS 7) |
+| Association | dropped within seconds, repeatedly | stable; DHCP on first attempt |
+
+Roughly **60 dB** of recovered transmit signal. Every association failure previously blamed on range,
+then on SPI, then on bridging, traces back to this.
+
+### Caveat: this is a stand-in, not the right BCF
+
+`bcf_fgh100mhaamd` is the calibration for the **Quectel FGH100M-H** (the Seeed Wio-WM6108 card this
+Pi was originally designed around). The fitted radio is a **Heltec HT-HC01**. Both are MM6108 on
+mini-PCIe, and Quectel's part is openly an MM6108, so it is a close stand-in — but the BCF
+characterises the **board**, not the chip.
+
+That is measurable, not assumed: `.regdom_US` differs in both size and content across boards
+(`aw_hm593` 293 B, `fgh100mhaamd` 138 B, `mm_hl1` 329 B), so the regulatory tables encode
+per-board power limits and **cannot be mixed and matched**. TX against the HT-HC01's 21 dBm spec is
+unverified. Ask Morse which of their shipped BCFs covers an HT-HC01 before trusting this for anything
+but bench work.
+
+### BCF file format, for reference
+
+The Linux driver's `.bin` files are **`elf32-littleriscv` objects**, not raw blobs:
+
+```
+.board_config  0x70    .regdom_AU 0x54   .regdom_US 0x8a   .board_desc 0x07
+.regdom_{EU,IN,JP,KR,NZ,SG} 0x0c each    .build_ver 0x22
+```
+
+The ESP-IDF SDK's `.mbin` files are a **12-byte `MMBC` header followed by exactly the
+`.board_config` payload** — verified byte-identical on a matching pair. So calibration transfers
+between the two formats trivially; the regdom sections do not, which is why hand-assembling a BCF
+for an unsupported module is not safe.
+
+### Related: the Dupont wiring is a recurring fault source
+
+Separately from the BCF, this build's SPI link is hand-wired with Dupont jumpers at 50 MHz, and it
+fails whenever the board is handled: 64 `cmd53`/`find_token` errors escalating to a hard
+`morse_spi_probe: probe failed (ret:-5)` with `b=0xffffffff` (MISO never driven), cleared to **zero**
+by reseating, then **937 errors in a 7-minute window** after the board was moved to attach a USB NIC.
+`b=0x80110002` means marginal-but-responding; `b=0xffffffff` means nothing is driving the line.
+Lowering the SPI clock does **not** help (10 MHz was worse; 50 MHz also failed while the wiring was
+bad). Solder a proper header.
