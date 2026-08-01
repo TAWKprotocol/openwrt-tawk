@@ -119,4 +119,5 @@ variables at once, which is what made the earlier diagnosis take so long.
 | `overlays/mm6108-spi-overlay.dts` | WM1302 HAT pinout — reset 17, IRQ 5, wake 23, busy 24 |
 | `tools/gpioprobe.c` | bias-flip liveness probe — tells a dead card from a wiring fault |
 | `tools/holdpin.c` | hold one GPIO at a level (power-enable / reset tests) |
+| `tools/flexmon.sh` | mechanical-stress monitor — loads the SPI bus and names the fault by signature while you flex/twist the hardware. Finds the cold joint that only opens when something moves. See BRINGUP.md §12 |
 | `legacy-stock-kernel/` | the abandoned stock-kernel + DKMS route, kept for the record |

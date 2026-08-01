@@ -837,3 +837,63 @@ by reseating, then **937 errors in a 7-minute window** after the board was moved
 `b=0x80110002` means marginal-but-responding; `b=0xffffffff` means nothing is driving the line.
 Lowering the SPI clock does **not** help (10 MHz was worse; 50 MHz also failed while the wiring was
 bad). Solder a proper header.
+
+## 12. Mechanical validation of the hand-wired harness (2026-08-01)
+
+§0 records that a hand-wired MM6108 worked where the WM1302 HAT never did. That established the
+harness was *correct*. It did not establish it was *sound* — every measurement to that point was
+taken at rest, and the failure that reaches the field is the joint that only opens when something
+moves. The harness was reworked onto a proper soldered header and then deliberately abused.
+
+Rig: [`tools/flexmon.sh`](tools/flexmon.sh) — loads the SPI bus and samples the failure indicators
+once a second while the hardware is flexed by hand, naming each fault by signature (`CHIP-RESET`,
+`IRQ-STALL`, `IRQ-STORM`, `SPI-ERROR`, `CMD-FAIL`, `TX-ERROR`, `CARRIER-LOSS`).
+
+| Test | What it exercises | Result |
+|---|---|---|
+| Firmware + BCF load, twice, across a power event | MISO/MOSI/CLK/CS bulk integrity | 460,260 B, **byte-identical crc32 `0xe8e90636`** both times |
+| 6.96 MB sustained UDP over the link, 60 s | data path at rate | 0 `tx_errors`, 0 `tx_dropped` |
+| 5 × `rmmod`/`modprobe` (full chip reset each) | **RESET / WAKE / BUSY** — nothing else drives these | 5/5 clean |
+| 120 s harness flex, tug and tap under load | the joints, mechanically | 0 anomalies |
+| 120 s deliberate twisting of the HaLow board | pad stress and wire-to-wire contact | 0 anomalies |
+
+Command channel across the entire session: `Commands failed 0`, `responses failed 0`, `repeated 0`,
+`late 0`, `Invalid pages received 0`. `IRQ 36 (Morse SPI IRQ)` held a steady 32–45/s throughout.
+
+**All six hand-soldered signals confirmed live, not merely claimed:**
+
+```
+gpio-3   (MM_WAKE   |morse-wakeup-ctrl   ) out hi       pin 5
+gpio-5   (MM_RESET                       )              pin 29
+gpio-7   (MM_BUSY   |morse-async-wakeup-c) in  lo IRQ   pin 26   ← observed toggling hi/lo
+gpio-8   (GPIO8     |spi0 CS0            ) out lo       pin 24
+gpio-25  (GPIO25    |mm610x_spi_irq_gpio ) in  hi IRQ   pin 22   ← ~37 interrupts/s
+```
+
+`MM_BUSY` reading `lo` on one sample and `hi` on another is the useful observation: a dead or
+badly-joined input sits stuck at one level.
+
+### Three traps this run produced
+
+1. **Don't grep for `timeout` when scanning for SPI errors.** The driver prints
+   `default_cmd_timeout_ms : 600` in its module-parameter dump, so a loose pattern reports an error
+   on every reset cycle. It flagged a false `spi_errors=1` on 5/5 cycles before being caught.
+   Anchor on `errno:-` and `ret:-<digit>` instead.
+2. **Run the monitor detached.** The first attempt streamed over an interactive SSH session and lost
+   the whole run when the link dropped — the one moment the data mattered. `flexmon.sh` now
+   `setsid`s and appends to a log that survives a dropped link and can be tailed live.
+3. **An unsupported board will interrupt power before it shorts a signal.** Mid-test the Pi rebooted;
+   `pstore` was empty (ramoops is enabled, so a kernel panic *would* have been captured), meaning it
+   lost power rather than crashed. Cause was the module flopping unsupported and disturbing the power
+   lead — a mounting fault, not a solder fault.
+
+### What is still open
+
+- A visible pin-to-pin contact was observed while the board was twisted, but it never once appeared
+  in any counter. Consistent with the **mini-PCIe edge fingers** touching something rather than any
+  soldered joint — those carry signals the driver never reads, so they short silently. Worth checking
+  what sits under the card edge before permanent mounting.
+- **Strain relief is still the real risk.** Torque into soldered pads is cumulative: it passes every
+  test right up until a pad lifts. The joints are sound; the mounting should be made permanent.
+- RF remains limited by the BCF, not the wiring — see §11. Link sat at −64 to −71 dBm throughout,
+  and twisting the board moved it by ~1 dB, i.e. not at all.
